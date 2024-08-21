@@ -2,6 +2,11 @@ export CGO_ENABLED = 0
 
 all: build
 
+install-tools:
+	@go mod download
+	@echo Installing tools from tools.go
+	@cat tools.go | grep _ | awk -F'"' '{print $$2}' | xargs -tI % go install %
+
 fmt:
 	go fmt ./...
 
@@ -12,7 +17,7 @@ test:
 	go test -v ./... -coverprofile /dev/null
 
 build: fmt lint vet test
-	go build ./...
+	go build -o ./dist ./...
 
 run: build
 	go run ./
