@@ -19,7 +19,7 @@ test:
 build: fmt lint vet test
 	go build -o ./dist ./...
 
-run: build
+run: fmt lint vet test
 	go run ./
 
 .PHONY: all fmt lint vet test build run
