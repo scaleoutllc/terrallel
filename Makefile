@@ -22,4 +22,4 @@ build: fmt lint vet test
 run: fmt lint vet test
 	go run ./
 
-.PHONY: all fmt lint vet test build run
+.PHONY: all fmt lint vet test build run install-tools
