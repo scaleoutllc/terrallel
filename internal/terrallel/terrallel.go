@@ -12,16 +12,16 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-type config struct {
-	Basedir string
-}
-
 type Terrallel struct {
-	Config   config
-	Refs     map[string]*TargetRef `yaml:"targets"`
+	Config   *Config `yaml:"terrallel,omitempty"`
 	Manifest map[string]*Target
 	stdout   io.Writer
 	stderr   io.Writer
+}
+
+type Config struct {
+	Basedir string
+	Import  []string
 }
 
 type Target struct {
@@ -44,18 +44,8 @@ func New(path string, stdout io.Writer, stderr io.Writer) (*Terrallel, error) {
 	if err = yaml.Unmarshal(raw, t); err != nil {
 		return nil, fmt.Errorf("failure loading manifest: %w", err)
 	}
-	for name, ref := range t.Refs {
-		if err := ref.validate(); err != nil {
-			return nil, fmt.Errorf("invalid key %s: %w", name, err)
-		}
-	}
-	for name, ref := range t.Refs {
-		ref.parent = name
-		target, err := ref.build(t, 0, name)
-		if err != nil {
-			return nil, fmt.Errorf("failure processing group %v: %w", name, err)
-		}
-		t.Manifest[name] = target
+	if err := resolveTargets(t.Manifest, append(t.Config.Import, path)); err != nil {
+		return nil, fmt.Errorf("failure processing manifest: %w", err)
 	}
 	return t, nil
 }
@@ -76,13 +66,11 @@ func (t *Terrallel) Run(command string, args []string, targetName string) (treep
 	}()
 	wg := sync.WaitGroup{}
 	results, err := (&runner{
-		command:  command,
-		args:     args,
-		config:   t.Config,
-		stdout:   t.stdout,
-		stderr:   t.stderr,
-		procChan: procChan,
-		wg:       &wg,
+		terrallel: t,
+		command:   command,
+		args:      args,
+		procChan:  procChan,
+		wg:        &wg,
 	}).start(ctx, target)
 	wg.Wait()
 	close(procChan)

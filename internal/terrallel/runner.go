@@ -1,7 +1,6 @@
 package terrallel
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -18,14 +17,12 @@ import (
 
 type traversalFn func(context.Context, *Target, treeprint.Tree) error
 type runner struct {
-	config   config
-	stdout   io.Writer
-	stderr   io.Writer
-	command  string
-	args     []string
-	procChan chan *exec.Cmd
-	wg       *sync.WaitGroup
-	traverse traversalFn
+	terrallel *Terrallel
+	command   string
+	args      []string
+	procChan  chan *exec.Cmd
+	wg        *sync.WaitGroup
+	traverse  traversalFn
 }
 
 func (r *runner) start(ctx context.Context, target *Target) (treeprint.Tree, error) {
@@ -126,10 +123,10 @@ func (r *runner) workspaces(workspaces []string, results treeprint.Tree) error {
 
 func (r *runner) exec(workspace string, results treeprint.Tree) error {
 	cmd := exec.Command(r.command, r.args...)
-	cmd.Dir = path.Join(r.config.Basedir, workspace)
+	cmd.Dir = path.Join(r.terrallel.Config.Basedir, workspace)
 	prefix := fmt.Sprintf("[%s]: ", workspace)
-	cmd.Stdout = newPrefixedWriter(r.stdout, prefix)
-	cmd.Stderr = newPrefixedWriter(r.stderr, prefix)
+	cmd.Stdout = prefixWriter(r.terrallel.stdout, prefix)
+	cmd.Stderr = prefixWriter(r.terrallel.stderr, prefix)
 	r.wg.Add(1)
 	defer r.wg.Done()
 	r.procChan <- cmd
@@ -175,55 +172,4 @@ func handleAbort(
 			}
 		}
 	}()
-}
-
-type prefixedWriter struct {
-	writer io.Writer
-	prefix []byte
-	buf    *bytes.Buffer
-	mu     sync.Mutex
-}
-
-func newPrefixedWriter(w io.Writer, prefix string) *prefixedWriter {
-	return &prefixedWriter{
-		writer: w,
-		prefix: []byte(prefix),
-		buf:    bytes.NewBuffer(nil),
-	}
-}
-
-func (p *prefixedWriter) Write(data []byte) (int, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	totalWritten := 0
-	for len(data) > 0 {
-		newlineIndex := bytes.IndexByte(data, '\n')
-		if newlineIndex == -1 {
-			p.buf.Write(data)
-			totalWritten += len(data)
-			break
-		}
-		line := data[:newlineIndex+1]
-		p.buf.Write(line)
-		totalWritten += len(line)
-		p.flushBuffer()
-		data = data[newlineIndex+1:]
-	}
-	return totalWritten, nil
-}
-
-func (p *prefixedWriter) flushBuffer() error {
-	if p.buf.Len() == 0 {
-		return nil
-	}
-	_, err := p.writer.Write(p.prefix)
-	if err != nil {
-		return err
-	}
-	_, err = p.writer.Write(p.buf.Bytes())
-	if err != nil {
-		return err
-	}
-	p.buf.Reset()
-	return nil
 }

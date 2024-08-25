@@ -1,0 +1,35 @@
+targets:
+  # This manages all GCP clusters.
+  fast-dev-gcp-clusters:
+    workspaces:
+    # This load balancer is a global entry point to all regional GCP clusters
+    # for the fast-dev environment. It must exist before GKE clusters are
+    # created. An istio-gateway service running in each regional GKE cluster
+    # will associate its pods with this global load balancer directly.
+    - fast/dev/gcp/global/load-balancer
+    next:
+      group:
+      - fast-dev-gcp-us-cluster
+      - fast-dev-gcp-au-cluster
+
+  # This manages the US GCP cluster.
+  fast-dev-gcp-us-cluster:
+    workspaces:
+    - fast/dev/gcp/us-east1/workload-cluster/k8s
+    next:
+      workspaces:
+      - fast/dev/gcp/us-east1/workload-cluster/core-services
+      next:
+        workspaces:
+        - fast/dev/gcp/us-east1/workload-cluster/routing
+
+  # This manages the Australian GCP cluster.
+  fast-dev-gcp-au-cluster:
+    workspaces:
+    - fast/dev/gcp/australia-southeast1/workload-cluster/k8s
+    next:
+      workspaces:
+      - fast/dev/gcp/australia-southeast1/workload-cluster/core-services
+      next:
+        workspaces:
+        - fast/dev/gcp/australia-southeast1/workload-cluster/routing

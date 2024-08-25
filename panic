@@ -1,0 +1,9 @@
+panic: send on closed channel
+
+goroutine 90 [running]:
+github.com/scaleoutllc/terrallel/internal/terrallel.(*runner).exec(0xc00019c000, {0xc0000f85a0, 0x2f}, {0x5730c0, 0xc0000acc80})
+	/home/tkellen/sources/scaleoutllc/internal/terrallel/internal/terrallel/runner.go:134 +0x407
+github.com/scaleoutllc/terrallel/internal/terrallel.(*runner).workspaces.func1({0xc0000f85a0?, 0xc0000aefa0?})
+	/home/tkellen/sources/scaleoutllc/internal/terrallel/internal/terrallel/runner.go:110 +0x70
+created by github.com/scaleoutllc/terrallel/internal/terrallel.(*runner).workspaces in goroutine 49
+	/home/tkellen/sources/scaleoutllc/internal/terrallel/internal/terrallel/runner.go:108 +0xe5

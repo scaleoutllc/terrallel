@@ -1,0 +1,24 @@
+targets:
+  # This manages the AWS networks as one. All VPCs are peered as spokes to a
+  # transit gateway. They can communicate directly with one another and
+  # route all egress through a shared transit VPC. Impossibly complex stuff
+  # compared to GCP.
+  network-dev-aws:
+    group:
+    - network-dev-aws-us
+    - network-dev-aws-au
+    next:
+      workspaces:
+      - shared/dev/aws/global/routing
+
+  # This manages the US AWS network only.
+  network-dev-aws-us:
+    workspaces:
+    - shared/dev/aws/us-east-1/network
+    - fast/dev/aws/us-east-1/network
+
+  # This manages the Australian AWS network only.
+  network-dev-aws-au:
+    workspaces:
+    - shared/dev/aws/ap-southeast-2/network
+    - fast/dev/aws/ap-southeast-2/network

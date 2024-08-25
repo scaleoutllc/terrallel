@@ -36,6 +36,8 @@ Here is a sample Infrafile:
 ```yaml
 config:
   basedir: environments
+  import:
+  - path/to/targetfiles/*.yml
 
 targets:
   numbers:

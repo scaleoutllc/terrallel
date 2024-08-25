@@ -1,0 +1,26 @@
+targets:
+  # This manages all GCP networks as one and meshes them together using a
+  # Network Connectivity Hub with each regional VPC as a spoke.
+  network-dev-gcp:
+    workspaces:
+    - shared/dev/gcp/global/network
+    - fast/dev/gcp/global/network
+    next:
+      group:
+      - network-dev-gcp-us
+      - network-dev-gcp-au
+      next:
+        workspaces:
+        - shared/dev/gcp/global/routing
+  
+  # This manages the US GCP network.
+  network-dev-gcp-us:
+    workspaces:
+    - shared/dev/gcp/us-east1/network
+    - fast/dev/gcp/us-east1/network
+
+  # This manages the Australian GCP network.
+  network-dev-gcp-au:
+    workspaces:
+    - shared/dev/gcp/australia-southeast1/network
+    - fast/dev/gcp/australia-southeast1/network
