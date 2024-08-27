@@ -4,6 +4,13 @@ terrallel:
   - terrallel/*.yml
 
 targets:
+  # This manages the local kind clusters as one.
+  fast-dev-local-clusters:
+    group:
+    - fast-dev-mgmt-local-us-cluster
+    - fast-dev-workload-local-us-cluster
+    - fast-dev-workload-local-au-cluster
+
   # This manages all networks in all clouds in all regions as one. The
   # resultant networks are meshed with a combination of primitives from
   # each provider. By default every network can directly reach every

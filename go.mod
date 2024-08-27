@@ -1,10 +1,12 @@
 module github.com/scaleoutllc/terrallel
 
-go 1.22.5
+go 1.23
 
 require (
 	github.com/fatih/color v1.17.0
+	github.com/google/go-cmp v0.6.0
 	github.com/tkellen/treeprint v0.0.0-20240817084536-1355d33749e2
+	gopkg.in/yaml.v2 v2.4.0
 	gopkg.in/yaml.v3 v3.0.1
 	honnef.co/go/tools v0.5.1
 )

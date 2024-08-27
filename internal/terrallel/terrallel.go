@@ -1,34 +1,25 @@
 package terrallel
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
-	"sync"
+	"path"
 
-	"github.com/tkellen/treeprint"
 	"gopkg.in/yaml.v3"
 )
 
 type Terrallel struct {
 	Config   *Config `yaml:"terrallel,omitempty"`
 	Manifest map[string]*Target
-	stdout   io.Writer
-	stderr   io.Writer
 }
 
 type Config struct {
 	Basedir string
 	Import  []string
-}
-
-type Target struct {
-	Name       string
-	Group      []*Target `yaml:"group,omitempty"`
-	Workspaces []string  `yaml:"workspaces,omitempty"`
-	Next       *Target   `yaml:"next,omitempty"`
+	stdout  io.Writer
+	stderr  io.Writer
 }
 
 func New(path string, stdout io.Writer, stderr io.Writer) (*Terrallel, error) {
@@ -38,8 +29,6 @@ func New(path string, stdout io.Writer, stderr io.Writer) (*Terrallel, error) {
 	}
 	t := &Terrallel{
 		Manifest: map[string]*Target{},
-		stdout:   stdout,
-		stderr:   stderr,
 	}
 	if err = yaml.Unmarshal(raw, t); err != nil {
 		return nil, fmt.Errorf("failure loading manifest: %w", err)
@@ -47,32 +36,36 @@ func New(path string, stdout io.Writer, stderr io.Writer) (*Terrallel, error) {
 	if err := resolveTargets(t.Manifest, append(t.Config.Import, path)); err != nil {
 		return nil, fmt.Errorf("failure processing manifest: %w", err)
 	}
+	t.Config.stdout = stdout
+	t.Config.stderr = stderr
 	return t, nil
 }
 
-func (t *Terrallel) Run(command string, args []string, targetName string) (treeprint.Tree, error) {
-	target, ok := t.Manifest[targetName]
-	if !ok {
-		return nil, fmt.Errorf("target %s not found", targetName)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	procs := []*exec.Cmd{}
-	handleAbort(cancel, procs, t.stderr)
-	procChan := make(chan *exec.Cmd)
-	go func() {
-		for proc := range procChan {
-			procs = append(procs, proc)
+func (t *Terrallel) Runner(args []string, target *Target) *treeRun {
+	exec := terraform(t.Config, args)
+	runTree := target.depthFirst(exec)
+	for _, arg := range args {
+		if arg == "destroy" {
+			runTree = target.breadthFirst(exec)
 		}
-	}()
-	wg := sync.WaitGroup{}
-	results, err := (&runner{
-		terrallel: t,
-		command:   command,
-		args:      args,
-		procChan:  procChan,
-		wg:        &wg,
-	}).start(ctx, target)
-	wg.Wait()
-	close(procChan)
-	return results, err
+	}
+	return runTree
+}
+
+func terraform(config *Config, args []string) execWork {
+	return func(name string) *work {
+		prefix := fmt.Sprintf("[%s]: ", name)
+		stdout := prefixWriter(config.stdout, prefix)
+		stderr := prefixWriter(config.stderr, prefix)
+		cmd := exec.Command("terraform", args...)
+		cmd.Dir = path.Join(config.Basedir, name)
+		cmd.Stdout = stdout
+		cmd.Stderr = stderr
+		return &work{
+			name:   name,
+			cmd:    cmd,
+			stdout: stdout.buf,
+			stderr: stderr.buf,
+		}
+	}
 }

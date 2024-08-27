@@ -15,10 +15,10 @@ targets:
   network-dev-aws-us:
     workspaces:
     - shared/dev/aws/us-east-1/network
-    - fast/dev/aws/us-east-1/network
+    - fast/dev/aws/us-east-1/workload-cluster/network
 
   # This manages the Australian AWS network only.
   network-dev-aws-au:
     workspaces:
     - shared/dev/aws/ap-southeast-2/network
-    - fast/dev/aws/ap-southeast-2/network
+    - fast/dev/aws/ap-southeast-2/workload-cluster/network

@@ -17,10 +17,10 @@ targets:
   network-dev-gcp-us:
     workspaces:
     - shared/dev/gcp/us-east1/network
-    - fast/dev/gcp/us-east1/network
+    - fast/dev/gcp/us-east1/workload-cluster/network
 
   # This manages the Australian GCP network.
   network-dev-gcp-au:
     workspaces:
     - shared/dev/gcp/australia-southeast1/network
-    - fast/dev/gcp/australia-southeast1/network
+    - fast/dev/gcp/australia-southeast1/workload-cluster/network
