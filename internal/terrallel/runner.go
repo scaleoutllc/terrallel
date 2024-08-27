@@ -25,15 +25,29 @@ type runner struct {
 	traverse  traversalFn
 }
 
-func (r *runner) start(ctx context.Context, target *Target) (treeprint.Tree, error) {
-	results := treeprint.NewWithRoot(target.Name)
+// this can only be used once and not concurrently. gross.
+func (r *runner) start(target *Target) (treeprint.Tree, []*exec.Cmd, error) {
+	r.wg = &sync.WaitGroup{}
+	r.procChan = make(chan *exec.Cmd)
 	r.traverse = r.up
 	for _, arg := range r.args {
 		if arg == "destroy" {
 			r.traverse = r.down
 		}
 	}
-	return results, r.traverse(ctx, target, results)
+	ctx, cancel := context.WithCancel(context.Background())
+	procs := []*exec.Cmd{}
+	handleAbort(cancel, procs, r.terrallel.stderr)
+	go func() {
+		for proc := range r.procChan {
+			procs = append(procs, proc)
+		}
+	}()
+	results := treeprint.NewWithRoot(target.Name)
+	err := r.traverse(ctx, target, results)
+	r.wg.Wait()
+	close(r.procChan)
+	return results, procs, err
 }
 
 func (r *runner) up(ctx context.Context, target *Target, results treeprint.Tree) error {

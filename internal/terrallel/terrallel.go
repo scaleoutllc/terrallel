@@ -1,12 +1,9 @@
 package terrallel
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
-	"sync"
 
 	"github.com/tkellen/treeprint"
 	"gopkg.in/yaml.v3"
@@ -55,24 +52,10 @@ func (t *Terrallel) Run(command string, args []string, targetName string) (treep
 	if !ok {
 		return nil, fmt.Errorf("target %s not found", targetName)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	procs := []*exec.Cmd{}
-	handleAbort(cancel, procs, t.stderr)
-	procChan := make(chan *exec.Cmd)
-	go func() {
-		for proc := range procChan {
-			procs = append(procs, proc)
-		}
-	}()
-	wg := sync.WaitGroup{}
-	results, err := (&runner{
+	treeprint, _, err := (&runner{
 		terrallel: t,
 		command:   command,
 		args:      args,
-		procChan:  procChan,
-		wg:        &wg,
-	}).start(ctx, target)
-	wg.Wait()
-	close(procChan)
-	return results, err
+	}).start(target)
+	return treeprint, err
 }
