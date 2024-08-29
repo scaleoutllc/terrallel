@@ -55,10 +55,21 @@ func main() {
 			runner.Signal(sig)
 		}
 	}()
-	err = runner.Do(ctx)
+	var treeErr error
+	var reverse bool
+	for _, arg := range tfArgs {
+		if arg == "destroy" {
+			reverse = true
+		}
+	}
+	if reverse {
+		treeErr = runner.Reverse(ctx)
+	} else {
+		treeErr = runner.Forward(ctx)
+	}
 	fmt.Println(runner)
-	if err != nil {
-		fail(err)
+	if treeErr != nil {
+		fail(treeErr)
 	}
 }
 

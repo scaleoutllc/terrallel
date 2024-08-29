@@ -38,6 +38,12 @@ func (p *writer) Write(data []byte) (int, error) {
 		p.flushBuffer()
 		data = data[newlineIndex+1:]
 	}
+	if p.buf.Len() > 0 {
+		err := p.flushBuffer()
+		if err != nil {
+			return totalWritten, err
+		}
+	}
 	return totalWritten, nil
 }
 

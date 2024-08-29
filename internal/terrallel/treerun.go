@@ -12,20 +12,38 @@ import (
 	"github.com/tkellen/treeprint"
 )
 
-type treeRun struct {
+type treeRunner struct {
 	name       string
 	workspaces []*work
-	groups     []*treeRun
-	next       *treeRun
+	groups     []*treeRunner
+	next       *treeRunner
 }
 
-func (tr *treeRun) String() string {
+func newTreeRunner(t *Target, fn execWork) *treeRunner {
+	node := &treeRunner{
+		name:       t.Name,
+		workspaces: make([]*work, len(t.Workspaces)),
+		groups:     make([]*treeRunner, len(t.Group)),
+	}
+	for i, ws := range t.Workspaces {
+		node.workspaces[i] = fn(ws)
+	}
+	for i, g := range t.Group {
+		node.groups[i] = newTreeRunner(g, fn)
+	}
+	if t.Next != nil {
+		node.next = newTreeRunner(t.Next, fn)
+	}
+	return node
+}
+
+func (tr *treeRunner) String() string {
 	return tr.Report(treeprint.NewWithRoot(tr.name)).String()
 }
 
-func (tr *treeRun) Do(ctx context.Context) error {
-	if err := parallel(tr.groups, func(group *treeRun) error {
-		return group.Do(ctx)
+func (tr *treeRunner) Forward(ctx context.Context) error {
+	if err := parallel(tr.groups, func(group *treeRunner) error {
+		return group.Forward(ctx)
 	}); err != nil {
 		return err
 	}
@@ -35,12 +53,31 @@ func (tr *treeRun) Do(ctx context.Context) error {
 		return err
 	}
 	if tr.next != nil {
-		return tr.next.Do(ctx)
+		return tr.next.Forward(ctx)
 	}
 	return nil
 }
 
-func (tr *treeRun) Signal(sig os.Signal) {
+func (tr *treeRunner) Reverse(ctx context.Context) error {
+	if tr.next != nil {
+		if err := tr.next.Reverse(ctx); err != nil {
+			return err
+		}
+	}
+	if err := parallel(tr.workspaces, func(ws *work) error {
+		return ws.run(ctx)
+	}); err != nil {
+		return err
+	}
+	if err := parallel(tr.groups, func(group *treeRunner) error {
+		return group.Reverse(ctx)
+	}); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (tr *treeRunner) Signal(sig os.Signal) {
 	if len(tr.groups) != 0 {
 		for _, group := range tr.groups {
 			group.Signal(sig)
@@ -56,7 +93,7 @@ func (tr *treeRun) Signal(sig os.Signal) {
 	}
 }
 
-func (tr *treeRun) Report(root treeprint.Tree) treeprint.Tree {
+func (tr *treeRunner) Report(root treeprint.Tree) treeprint.Tree {
 	if len(tr.groups) != 0 {
 		groups := root.AddBranch("groups")
 		for _, g := range tr.groups {
@@ -81,7 +118,6 @@ func parallel[T any](items []T, action func(T) error) error {
 	}
 	wg := &sync.WaitGroup{}
 	errCh := make(chan error, len(items))
-
 	for _, item := range items {
 		wg.Add(1)
 		go func(item T) {
@@ -89,12 +125,10 @@ func parallel[T any](items []T, action func(T) error) error {
 			errCh <- action(item)
 		}(item)
 	}
-
 	go func() {
 		wg.Wait()
 		close(errCh)
 	}()
-
 	var errs []error
 	for err := range errCh {
 		if err != nil {
