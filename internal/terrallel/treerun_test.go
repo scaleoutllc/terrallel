@@ -1,20 +1,26 @@
-package terrallel
+package terrallel_test
 
 import (
 	"bytes"
 	"context"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"runtime"
+	"strconv"
+	"sync"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/scaleoutllc/terrallel/internal/terrallel"
 	"gopkg.in/yaml.v2"
 )
 
 type exitTree struct {
 	Workspaces []int       `yaml:"workspaces"`
-	Groups     []*exitTree `yaml:"groups"`
+	Group      []*exitTree `yaml:"groups"`
 	Next       *exitTree   `yaml:"next"`
 }
 
@@ -23,52 +29,79 @@ func (et *exitTree) String() string {
 	return string(yamlData)
 }
 
-func exitCmd(name string, code int) *work {
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		cmd = exec.Command("cmd", "/C", fmt.Sprintf("exit %d", code))
-	} else {
-		cmd = exec.Command("sh", "-c", fmt.Sprintf("exit %d", code))
-	}
-	return &work{
-		name:   name,
-		cmd:    cmd,
-		stdout: new(bytes.Buffer),
-		stderr: new(bytes.Buffer),
-	}
-}
-
-func collectExits(tree *treeRunner) *exitTree {
+func collectExits(tree *terrallel.TreeRunner) *exitTree {
 	et := &exitTree{}
-	for _, ws := range tree.workspaces {
-		et.Workspaces = append(et.Workspaces, ws.exitCode())
+	for _, ws := range tree.Workspaces {
+		et.Workspaces = append(et.Workspaces, ws.ExitCode())
 	}
-	for _, group := range tree.groups {
-		et.Groups = append(et.Groups, collectExits(group))
+	for _, group := range tree.Group {
+		et.Group = append(et.Group, collectExits(group))
 	}
-	if tree.next != nil {
-		et.Next = collectExits(tree.next)
+	if tree.Next != nil {
+		et.Next = collectExits(tree.Next)
 	}
 	return et
+}
+
+func testWorker(ws string) *terrallel.Job {
+	// Regular expression to parse delay and exit codes
+	re := regexp.MustCompile(`\.delay\((\d+)\)\.exit\((\d+)\)`)
+	matches := re.FindStringSubmatch(ws)
+
+	delayms := 0
+	exit := 0
+	if len(matches) == 3 {
+		delayms, _ = strconv.Atoi(matches[1])
+		exit, _ = strconv.Atoi(matches[2])
+	}
+
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		cmd = exec.Command("cmd", "/C", fmt.Sprintf(`
+			SET WORKSPACE="%s"
+			SET /A SLEEP=%d/1000
+			SET EXITCODE=%d
+			echo running %%WORKSPACE%% for %%SLEEP%%s then exiting %%EXITCODE%%
+			ping -n %%SLEEP%% 127.0.0.1 > nul
+			exit /b %%EXITCODE%%
+		`, ws, delayms, exit))
+	} else {
+		cmd = exec.Command("sh", "-c", fmt.Sprintf(`
+			trap 'echo INTERRUPTED; exit 130' INT
+			WORKSPACE="%s"
+			SLEEP="%.3f"
+			EXIT=%d
+			echo "running ${WORKSPACE} for ${SLEEP}s then exiting ${EXIT}"
+			sleep ${SLEEP}
+			exit ${EXIT}
+		`, ws, float64(delayms)/1000, exit))
+	}
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+
+	return &terrallel.Job{
+		Name:   ws,
+		Cmd:    cmd,
+		Stdout: stdout,
+		Stderr: stderr,
+	}
 }
 
 func TestRunTreeForward(t *testing.T) {
 	tests := []struct {
 		name     string
-		root     *treeRunner
+		root     *terrallel.Target
 		expected *exitTree
 	}{
 		{
 			name: "clean exit allows traversal of tree",
-			root: &treeRunner{
-				workspaces: []*work{
-					exitCmd("parent.1", 0),
-					exitCmd("parent.2", 0),
-				},
-				next: &treeRunner{
-					workspaces: []*work{
-						exitCmd("child.1", 0),
-					},
+			root: &terrallel.Target{
+				Workspaces: []string{"a.delay(10).exit(0)", "b.delay(10).exit(0)"},
+				Next: &terrallel.Target{
+					Workspaces: []string{"c.delay(10).exit(0)"},
 				},
 			},
 			expected: &exitTree{
@@ -79,31 +112,20 @@ func TestRunTreeForward(t *testing.T) {
 			},
 		},
 		{
-			name: "sibling failures don't affect eachother",
-			root: &treeRunner{
-				workspaces: []*work{
-					exitCmd("parent.1", 0),
-					exitCmd("parent.2", 1),
-					exitCmd("parent.3", 0),
-					exitCmd("parent.4", 0),
-					exitCmd("parent.5", 0),
-				},
+			name: "sibling failures don't affect each other",
+			root: &terrallel.Target{
+				Workspaces: []string{"a.delay(10).exit(0)", "b.delay(10).exit(0)", "c.delay(10).exit(1)", "d.delay(10).exit(0)", "e.delay(10).exit(0)"},
 			},
 			expected: &exitTree{
-				Workspaces: []int{0, 1, 0, 0, 0},
+				Workspaces: []int{0, 0, 1, 0, 0},
 			},
 		},
 		{
 			name: "failure in parent prevents traversal of children",
-			root: &treeRunner{
-				workspaces: []*work{
-					exitCmd("parent.1", 0),
-					exitCmd("parent.2", 1),
-				},
-				next: &treeRunner{
-					workspaces: []*work{
-						exitCmd("child.1", 0),
-					},
+			root: &terrallel.Target{
+				Workspaces: []string{"a.delay(10).exit(0)", "b.delay(10).exit(1)"},
+				Next: &terrallel.Target{
+					Workspaces: []string{"c.delay(10).exit(0)"},
 				},
 			},
 			expected: &exitTree{
@@ -115,37 +137,27 @@ func TestRunTreeForward(t *testing.T) {
 		},
 		{
 			name: "failure stops outer children but allows sibling to complete",
-			root: &treeRunner{
-				groups: []*treeRunner{
+			root: &terrallel.Target{
+				Group: []*terrallel.Target{
 					{
-						workspaces: []*work{
-							exitCmd("sibling.1", 1),
-						},
-						next: &treeRunner{
-							workspaces: []*work{
-								exitCmd("skipped", 0),
-							},
+						Workspaces: []string{"a.delay(10).exit(1)"},
+						Next: &terrallel.Target{
+							Workspaces: []string{"b.delay(10).exit(0)"},
 						},
 					},
 					{
-						workspaces: []*work{
-							exitCmd("sibling.2", 0),
-						},
-						next: &treeRunner{
-							workspaces: []*work{
-								exitCmd("child.1", 0),
-							},
+						Workspaces: []string{"c.delay(10).exit(0)"},
+						Next: &terrallel.Target{
+							Workspaces: []string{"d.delay(10).exit(0)"},
 						},
 					},
 				},
-				next: &treeRunner{
-					workspaces: []*work{
-						exitCmd("last", 0),
-					},
+				Next: &terrallel.Target{
+					Workspaces: []string{"last.delay(10).exit(0)"},
 				},
 			},
 			expected: &exitTree{
-				Groups: []*exitTree{
+				Group: []*exitTree{
 					{
 						Workspaces: []int{1},
 						Next: &exitTree{
@@ -168,8 +180,9 @@ func TestRunTreeForward(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tt.root.Forward(context.Background())
-			got := collectExits(tt.root)
+			runner := terrallel.NewTreeRunner(tt.root, testWorker)
+			runner.Forward(context.Background())
+			got := collectExits(runner)
 			if diff := cmp.Diff(tt.expected, got); diff != "" {
 				t.Fatalf("exit trees do not match, expected\n%s\n---\ngot\n%s", tt.expected, got)
 			}
@@ -180,20 +193,15 @@ func TestRunTreeForward(t *testing.T) {
 func TestRunTreeReverse(t *testing.T) {
 	tests := []struct {
 		name     string
-		root     *treeRunner
+		root     *terrallel.Target
 		expected *exitTree
 	}{
 		{
 			name: "clean exit allows traversal of tree",
-			root: &treeRunner{
-				workspaces: []*work{
-					exitCmd("parent.1", 0),
-					exitCmd("parent.2", 0),
-				},
-				next: &treeRunner{
-					workspaces: []*work{
-						exitCmd("child.1", 0),
-					},
+			root: &terrallel.Target{
+				Workspaces: []string{"c.delay(10).exit(0)", "b.delay(10).exit(0)"},
+				Next: &terrallel.Target{
+					Workspaces: []string{"a.delay(10).exit(0)"},
 				},
 			},
 			expected: &exitTree{
@@ -204,31 +212,20 @@ func TestRunTreeReverse(t *testing.T) {
 			},
 		},
 		{
-			name: "sibling failures don't affect eachother",
-			root: &treeRunner{
-				workspaces: []*work{
-					exitCmd("parent.1", 0),
-					exitCmd("parent.2", 1),
-					exitCmd("parent.3", 0),
-					exitCmd("parent.4", 0),
-					exitCmd("parent.5", 0),
-				},
+			name: "sibling failures don't affect each other",
+			root: &terrallel.Target{
+				Workspaces: []string{"a.delay(10).exit(0)", "b.delay(10).exit(0)", "c.delay(10).exit(1)", "d.delay(10).exit(0)", "e.delay(10).exit(0)"},
 			},
 			expected: &exitTree{
-				Workspaces: []int{0, 1, 0, 0, 0},
+				Workspaces: []int{0, 0, 1, 0, 0},
 			},
 		},
 		{
 			name: "failure in parent prevents traversal of children",
-			root: &treeRunner{
-				workspaces: []*work{
-					exitCmd("child.1", 0),
-					exitCmd("child.2", 0),
-				},
-				next: &treeRunner{
-					workspaces: []*work{
-						exitCmd("parent.1", 1),
-					},
+			root: &terrallel.Target{
+				Workspaces: []string{"c.delay(10).exit(0)", "b.delay(10).exit(0)"},
+				Next: &terrallel.Target{
+					Workspaces: []string{"a.delay(10).exit(1)"},
 				},
 			},
 			expected: &exitTree{
@@ -240,37 +237,27 @@ func TestRunTreeReverse(t *testing.T) {
 		},
 		{
 			name: "failure stops outer children but allows sibling to complete",
-			root: &treeRunner{
-				groups: []*treeRunner{
+			root: &terrallel.Target{
+				Group: []*terrallel.Target{
 					{
-						workspaces: []*work{
-							exitCmd("grandchild.2", 0),
-						},
-						next: &treeRunner{
-							workspaces: []*work{
-								exitCmd("child.2", 0),
-							},
+						Workspaces: []string{"e.delay(10).exit(0)"},
+						Next: &terrallel.Target{
+							Workspaces: []string{"d.delay(10).exit(0)"},
 						},
 					},
 					{
-						workspaces: []*work{
-							exitCmd("grandchild.1", 0),
-						},
-						next: &treeRunner{
-							workspaces: []*work{
-								exitCmd("child.1", 1),
-							},
-							next: &treeRunner{
-								workspaces: []*work{
-									exitCmd("parent", 0),
-								},
+						Workspaces: []string{"c.delay(10).exit(0)"},
+						Next: &terrallel.Target{
+							Workspaces: []string{"b.delay(10).exit(1)"},
+							Next: &terrallel.Target{
+								Workspaces: []string{"a.delay(10).exit(0)"},
 							},
 						},
 					},
 				},
 			},
 			expected: &exitTree{
-				Groups: []*exitTree{
+				Group: []*exitTree{
 					{
 						Workspaces: []int{0},
 						Next: &exitTree{
@@ -290,10 +277,12 @@ func TestRunTreeReverse(t *testing.T) {
 			},
 		},
 	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tt.root.Reverse(context.Background())
-			got := collectExits(tt.root)
+			runner := terrallel.NewTreeRunner(tt.root, testWorker)
+			runner.Reverse(context.Background())
+			got := collectExits(runner)
 			if diff := cmp.Diff(tt.expected, got); diff != "" {
 				t.Fatalf("exit trees do not match, expected\n%s\n---\ngot\n%s", tt.expected, got)
 			}
@@ -301,31 +290,131 @@ func TestRunTreeReverse(t *testing.T) {
 	}
 }
 
-func TestTreeCancellation(t *testing.T) {
-	runner := &treeRunner{
-		name: "parent",
-		workspaces: []*work{
-			exitCmd("parent.1", 0),
-			exitCmd("parent.2", 0),
-		},
-		next: &treeRunner{
-			name: "child",
-			workspaces: []*work{
-				exitCmd("child.1", 0),
+func TestRunSignal(t *testing.T) {
+	tests := []struct {
+		name        string
+		root        *terrallel.Target
+		expected    *exitTree
+		exitAfterMs int64
+	}{
+		{
+			name:        "sigint terminates running processes at any level, skips dependent work",
+			exitAfterMs: 75,
+			root: &terrallel.Target{
+				Group: []*terrallel.Target{
+					{
+						Workspaces: []string{"a.delay(50).exit(0)", "b.delay(50).exit(0)"},
+						Next: &terrallel.Target{
+							Workspaces: []string{"c.delay(50).exit(0)"},
+							Next: &terrallel.Target{
+								Workspaces: []string{"d.delay(10).exit(0)"},
+							},
+						},
+					},
+					{
+						Workspaces: []string{"e.delay(75).exit(0)", "f.delay(10).exit(0)"},
+						Next: &terrallel.Target{
+							Workspaces: []string{"g.delay(10).exit(0)"},
+						},
+					},
+				},
+			},
+			expected: &exitTree{
+				Group: []*exitTree{
+					{
+						Workspaces: []int{0, 0},
+						Next: &exitTree{
+							Workspaces: []int{130},
+							Next: &exitTree{
+								Workspaces: []int{-1},
+							},
+						},
+					},
+					{
+						Workspaces: []int{130, 0},
+						Next: &exitTree{
+							Workspaces: []int{-1},
+						},
+					},
+				},
 			},
 		},
 	}
-	expected := &exitTree{
-		Workspaces: []int{-1, -1},
-		Next: &exitTree{
-			Workspaces: []int{-1},
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wg := &sync.WaitGroup{}
+			wg.Add(1)
+			runner := terrallel.NewTreeRunner(tt.root, testWorker)
+			go func() {
+				defer wg.Done()
+				runner.Forward(context.Background())
+			}()
+			time.Sleep(time.Duration(tt.exitAfterMs) * time.Millisecond)
+			runner.Signal(syscall.SIGINT)
+			wg.Wait()
+			got := collectExits(runner)
+			if diff := cmp.Diff(tt.expected, got); diff != "" {
+				t.Fatalf("exit trees do not match, expected\n%s\n---\ngot\n%s", tt.expected, got)
+			}
+		})
+	}
+}
+
+func TestRunContextCancel(t *testing.T) {
+	tests := []struct {
+		name          string
+		root          *terrallel.Target
+		expected      *exitTree
+		cancelAfterMs int64
+	}{
+		{
+			name:          "caoncelled context prevents future work from being scheduled, has no effect on running",
+			cancelAfterMs: 75,
+			root: &terrallel.Target{
+				Group: []*terrallel.Target{
+					{
+						Workspaces: []string{"a.delay(50).exit(0)", "b.delay(50).exit(0)"},
+						Next: &terrallel.Target{
+							Workspaces: []string{"c.delay(100).exit(0)"},
+							Next: &terrallel.Target{
+								Workspaces: []string{"d.delay(10).exit(0)"},
+							},
+						},
+					},
+				},
+			},
+			expected: &exitTree{
+				Group: []*exitTree{
+					{
+						Workspaces: []int{0, 0},
+						Next: &exitTree{
+							Workspaces: []int{0},
+							Next: &exitTree{
+								Workspaces: []int{-1},
+							},
+						},
+					},
+				},
+			},
 		},
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	runner.Forward(ctx)
-	got := collectExits(runner)
-	if diff := cmp.Diff(expected, got); diff != "" {
-		t.Fatalf("exit trees do not match, expected\n%s\n---\ngot\n%s", expected, got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wg := &sync.WaitGroup{}
+			wg.Add(1)
+			ctx, cancel := context.WithCancel(context.Background())
+			runner := terrallel.NewTreeRunner(tt.root, testWorker)
+			go func() {
+				defer wg.Done()
+				runner.Forward(ctx)
+			}()
+			time.Sleep(time.Duration(tt.cancelAfterMs) * time.Millisecond)
+			cancel()
+			wg.Wait()
+			got := collectExits(runner)
+			if diff := cmp.Diff(tt.expected, got); diff != "" {
+				t.Fatalf("exit trees do not match, expected\n%s\n---\ngot\n%s", tt.expected, got)
+			}
+		})
 	}
 }

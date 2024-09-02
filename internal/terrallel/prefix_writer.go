@@ -10,14 +10,17 @@ type writer struct {
 	writer io.Writer
 	prefix []byte
 	buf    *bytes.Buffer
+	saved  *bytes.Buffer
 	mu     sync.Mutex
 }
 
+// prefixWriter creates a new writer with a prefix
 func prefixWriter(w io.Writer, prefix string) *writer {
 	return &writer{
 		writer: w,
 		prefix: []byte(prefix),
 		buf:    bytes.NewBuffer(nil),
+		saved:  bytes.NewBuffer(nil),
 	}
 }
 
@@ -59,6 +62,13 @@ func (p *writer) flushBuffer() error {
 	if err != nil {
 		return err
 	}
+	p.saved.Write(p.buf.Bytes())
 	p.buf.Reset()
 	return nil
+}
+
+func (p *writer) Output() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.saved.String()
 }

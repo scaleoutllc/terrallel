@@ -16,10 +16,12 @@ vet:
 test:
 	go test -v ./... -coverprofile /dev/null
 
-build: fmt lint vet test
+validate: fmt lint vet test
+
+build: validate
 	go build -o ./dist ./...
 
-run: fmt lint vet test
+run: validate
 	go run ./
 
-.PHONY: all fmt lint vet test build run install-tools
+.PHONY: all fmt lint vet test validate build run install-tools

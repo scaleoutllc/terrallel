@@ -20,8 +20,8 @@ func main() {
 	if len(args) < 2 {
 		fail(errors.New("terrallel [-m] <target> -- <terraform command>"))
 	}
-	infra, err := terrallel.New(manifestPath, os.Stdout, os.Stderr)
-	if err != nil {
+	infra := terrallel.New(os.Stdout, os.Stderr)
+	if err := infra.Load(manifestPath); err != nil {
 		fail(err)
 	}
 	targetName := args[0]
@@ -33,7 +33,7 @@ func main() {
 	if err != nil {
 		fail(err)
 	}
-	runner := infra.Runner(tfArgs, target)
+	runner := infra.Runner(target, tfArgs)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	termReceived := false

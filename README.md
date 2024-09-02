@@ -1,5 +1,5 @@
 # terrallel
-> maximize parallel execution of terraform
+> run terraform in parallel across dependent workspaces
 
 # What is this?
 Terrallel is used to trace dependencies in an operator defined `Infrafile` of

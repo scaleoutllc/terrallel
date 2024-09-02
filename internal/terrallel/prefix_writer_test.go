@@ -2,8 +2,16 @@ package terrallel
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 )
+
+// A mock writer to simulate write errors
+type errorWriter struct{}
+
+func (e *errorWriter) Write(_ []byte) (int, error) {
+	return 0, errors.New("mock write error")
+}
 
 func TestPrefixWriter(t *testing.T) {
 	// Test cases
@@ -48,6 +56,12 @@ func TestPrefixWriter(t *testing.T) {
 			prefix:   "",
 			input:    "test line\n",
 			expected: "test line\n",
+		},
+		{
+			name:     "Newline within prefix",
+			prefix:   "[prefix]\n",
+			input:    "test line\n",
+			expected: "[prefix]\ntest line\n",
 		},
 	}
 
@@ -97,6 +111,49 @@ func TestPrefixWriterFlushBuffer(t *testing.T) {
 		output := buf.String()
 		if output != "" {
 			t.Errorf("Expected empty output, got %q", output)
+		}
+	})
+}
+
+func TestPrefixWriterOutput(t *testing.T) {
+	t.Run("Output after writing data", func(t *testing.T) {
+		var buf bytes.Buffer
+		pw := prefixWriter(&buf, "[prefix] ")
+		_, _ = pw.Write([]byte("line 1\nline 2\n"))
+		_, _ = pw.Write([]byte("line 3\n"))
+
+		expectedOutput := "line 1\nline 2\nline 3\n"
+		output := pw.Output()
+		if output != expectedOutput {
+			t.Errorf("Expected output %q, got %q", expectedOutput, output)
+		}
+	})
+
+	t.Run("Output after no data written", func(t *testing.T) {
+		var buf bytes.Buffer
+		pw := prefixWriter(&buf, "[prefix] ")
+		output := pw.Output()
+		if output != "" {
+			t.Errorf("Expected empty output, got %q", output)
+		}
+	})
+}
+
+func TestPrefixWriterErrorHandling(t *testing.T) {
+	t.Run("Write error handling", func(t *testing.T) {
+		pw := prefixWriter(&errorWriter{}, "[prefix] ")
+		_, err := pw.Write([]byte("line 1\n"))
+		if err == nil {
+			t.Fatalf("Expected error, got nil")
+		}
+	})
+
+	t.Run("Flush buffer with write error", func(t *testing.T) {
+		pw := prefixWriter(&errorWriter{}, "[prefix] ")
+		_, _ = pw.Write([]byte("incomplete"))
+		err := pw.flushBuffer()
+		if err == nil {
+			t.Fatalf("Expected error, got nil")
 		}
 	})
 }

@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -14,6 +15,8 @@ import (
 type Terrallel struct {
 	Config   *Config `yaml:"terrallel,omitempty"`
 	Manifest map[string]*Target
+	stdout   io.Writer
+	stderr   io.Writer
 }
 
 type Target struct {
@@ -26,86 +29,109 @@ type Target struct {
 type Config struct {
 	Basedir string
 	Import  []string
-	stdout  io.Writer
-	stderr  io.Writer
 }
 
-func New(path string, stdout io.Writer, stderr io.Writer) (*Terrallel, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("failure reading manifest: %w", err)
-	}
-	t := &Terrallel{
+func New(stdout io.Writer, stderr io.Writer) *Terrallel {
+	return &Terrallel{
 		Manifest: map[string]*Target{},
+		Config:   &Config{},
+		stdout:   stdout,
+		stderr:   stderr,
 	}
-	if err = yaml.Unmarshal(raw, t); err != nil {
-		return nil, fmt.Errorf("failure loading manifest: %w", err)
-	}
-	t.Manifest, err = loadTargets(append(t.Config.Import, path))
-	if err != nil {
-		return nil, fmt.Errorf("failure processing manifest: %w", err)
-	}
-	t.Config.stdout = stdout
-	t.Config.stderr = stderr
-	return t, nil
 }
 
-func (t *Terrallel) Runner(args []string, target *Target) *treeRunner {
-	return newTreeRunner(target, func(name string) *work {
+func (t *Terrallel) Load(path string) error {
+	manifest, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("reading: %w", err)
+	}
+	if err = yaml.Unmarshal(manifest, t); err != nil {
+		return fmt.Errorf("parsing manifest %s: %w", path, err)
+	}
+	if t.Config.Import == nil {
+		t.Config.Import = []string{}
+	}
+	importBytes, err := readImports(filepath.Dir(path), t.Config.Import)
+	if err != nil {
+		return fmt.Errorf("reading import files: %w", err)
+	}
+	unresolved, err := newUnresolved(append(importBytes, manifest))
+	if err != nil {
+		return fmt.Errorf("parsing imports: %w", err)
+	}
+	for name, target := range unresolved {
+		if resolved, err := target.resolve(unresolved, name, map[string]bool{}); err != nil {
+			return fmt.Errorf("resolving targets: %w", err)
+		} else {
+			t.Manifest[name] = resolved
+		}
+	}
+	return nil
+}
+
+func (t *Terrallel) Runner(target *Target, args []string) *TreeRunner {
+	return NewTreeRunner(target, func(name string) *Job {
 		prefix := fmt.Sprintf("[%s]: ", name)
-		stdout := prefixWriter(t.Config.stdout, prefix)
-		stderr := prefixWriter(t.Config.stderr, prefix)
+		stdout := prefixWriter(t.stdout, prefix)
+		stderr := prefixWriter(t.stderr, prefix)
 		cmd := exec.Command("terraform", args...)
 		cmd.Dir = path.Join(t.Config.Basedir, name)
 		cmd.Stdout = stdout
 		cmd.Stderr = stderr
-		return &work{
-			name:   name,
-			cmd:    cmd,
-			stdout: stdout.buf,
-			stderr: stderr.buf,
+		return &Job{
+			Name:   name,
+			Cmd:    cmd,
+			Stdout: stdout.saved,
+			Stderr: stderr.saved,
 		}
 	})
 }
 
-func loadTargets(imports []string) (map[string]*Target, error) {
-	targets := make(map[string]*target)
-	for _, glob := range imports {
-		paths, err := filepath.Glob(glob)
+func readImports(basedir string, globs []string) ([][]byte, error) {
+	var imports [][]byte
+	for _, pattern := range globs {
+		paths, err := filepath.Glob(path.Join(basedir, pattern))
 		if err != nil {
-			return nil, fmt.Errorf("failure expanding glob pattern %s: %w", glob, err)
+			return nil, fmt.Errorf("expanding file path: %w", err)
+		}
+		// a pattern that isn't a glob should be looked for explictly
+		if len(paths) == 0 {
+			if !strings.ContainsAny(pattern, "*?[]") {
+				paths = []string{path.Join(basedir, pattern)}
+			}
 		}
 		for _, path := range paths {
 			content, err := os.ReadFile(path)
 			if err != nil {
-				return nil, fmt.Errorf("failure reading import file %s: %w", path, err)
+				return nil, fmt.Errorf("reading import %s: %w", path, err)
 			}
-			temp := struct {
-				Targets map[string]*target `yaml:"targets"`
-			}{}
-			if err := yaml.Unmarshal(content, &temp); err != nil {
-				return nil, fmt.Errorf("failure unmarshalling: %w", err)
-			}
+			imports = append(imports, content)
+		}
+	}
+	return imports, nil
+}
 
+type unresolved map[string]*target
+
+func newUnresolved(imports [][]byte) (unresolved, error) {
+	all := unresolved{}
+	for _, content := range imports {
+		temp := struct {
+			Targets map[string]*target `yaml:"targets"`
+		}{}
+		if err := yaml.Unmarshal(content, &temp); err != nil {
+			return nil, err
+		}
+		if temp.Targets != nil {
 			for name, target := range temp.Targets {
-				if _, exists := targets[name]; exists {
-					return nil, fmt.Errorf("duplicate target %s found in import file %s", name, path)
+				if _, exists := all[name]; exists {
+					return nil, fmt.Errorf("duplicate: %s", name)
 				}
-				targets[name] = target
+				all[name] = target
 			}
 		}
 	}
-
-	finalTargets := make(map[string]*Target)
-	for name, target := range targets {
-		resolved, err := target.build(targets, name)
-		if err != nil {
-			return nil, fmt.Errorf("failure processing target %s: %w", name, err)
-		}
-		finalTargets[name] = resolved
-	}
-
-	return finalTargets, nil
+	return all, nil
 }
 
 type target struct {
@@ -115,43 +141,42 @@ type target struct {
 	Next       *target
 }
 
-func (t *target) build(targets map[string]*target, name string) (*Target, error) {
+func (t *target) resolve(targets unresolved, name string, visited map[string]bool) (*Target, error) {
 	if len(t.Group) != 0 && len(t.Workspaces) != 0 {
 		return nil, fmt.Errorf("workspaces and group cannot coexist at the same level")
 	}
+	if visited[name] {
+		return nil, fmt.Errorf("recursive loop detected for target %s", name)
+	}
+	visited[name] = true
 	target := &Target{
 		Name:       name,
 		Workspaces: t.Workspaces,
 	}
 	var err error
 	if len(t.Group) != 0 {
-		target.Group, err = t.resolveGroup(targets)
-		if err != nil {
-			return nil, err
+		var children []*Target
+		for _, groupName := range t.Group {
+			// don't resolve the same target more than once
+			if childTarget, ok := targets[groupName]; ok {
+				resolvedChild, err := childTarget.resolve(targets, groupName, visited)
+				if err != nil {
+					return nil, err
+				}
+				children = append(children, resolvedChild)
+			} else {
+				return nil, fmt.Errorf("target %s does not exist", groupName)
+			}
 		}
+		target.Group = children
 	}
 	if t.Next != nil {
 		t.Next.parent = t.parent
-		target.Next, err = t.Next.build(targets, "next")
+		target.Next, err = t.Next.resolve(targets, "next", visited)
 		if err != nil {
 			return nil, err
 		}
 	}
+	delete(visited, name)
 	return target, nil
-}
-
-func (t *target) resolveGroup(targets map[string]*target) ([]*Target, error) {
-	var children []*Target
-	for _, name := range t.Group {
-		if resolved, ok := targets[name]; ok {
-			group, err := resolved.build(targets, name)
-			if err != nil {
-				return nil, err
-			}
-			children = append(children, group)
-		} else {
-			return nil, fmt.Errorf("group %s does not exist", name)
-		}
-	}
-	return children, nil
 }

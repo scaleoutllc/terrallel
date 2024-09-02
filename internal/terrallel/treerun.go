@@ -12,64 +12,64 @@ import (
 	"github.com/tkellen/treeprint"
 )
 
-type treeRunner struct {
-	name       string
-	workspaces []*work
-	groups     []*treeRunner
-	next       *treeRunner
+type TreeRunner struct {
+	Name       string
+	Workspaces []*Job
+	Group      []*TreeRunner
+	Next       *TreeRunner
 }
 
-func newTreeRunner(t *Target, fn execWork) *treeRunner {
-	node := &treeRunner{
-		name:       t.Name,
-		workspaces: make([]*work, len(t.Workspaces)),
-		groups:     make([]*treeRunner, len(t.Group)),
+func NewTreeRunner(t *Target, fn Worker) *TreeRunner {
+	node := &TreeRunner{
+		Name:       t.Name,
+		Workspaces: make([]*Job, len(t.Workspaces)),
+		Group:      make([]*TreeRunner, len(t.Group)),
 	}
 	for i, ws := range t.Workspaces {
-		node.workspaces[i] = fn(ws)
+		node.Workspaces[i] = fn(ws)
 	}
 	for i, g := range t.Group {
-		node.groups[i] = newTreeRunner(g, fn)
+		node.Group[i] = NewTreeRunner(g, fn)
 	}
 	if t.Next != nil {
-		node.next = newTreeRunner(t.Next, fn)
+		node.Next = NewTreeRunner(t.Next, fn)
 	}
 	return node
 }
 
-func (tr *treeRunner) String() string {
-	return tr.Report(treeprint.NewWithRoot(tr.name)).String()
+func (tr *TreeRunner) String() string {
+	return tr.Report(treeprint.NewWithRoot(tr.Name)).String()
 }
 
-func (tr *treeRunner) Forward(ctx context.Context) error {
-	if err := parallel(tr.groups, func(group *treeRunner) error {
+func (tr *TreeRunner) Forward(ctx context.Context) error {
+	if err := parallel(tr.Group, func(group *TreeRunner) error {
 		return group.Forward(ctx)
 	}); err != nil {
 		return err
 	}
-	if err := parallel(tr.workspaces, func(ws *work) error {
+	if err := parallel(tr.Workspaces, func(ws *Job) error {
 		return ws.run(ctx)
 	}); err != nil {
 		return err
 	}
-	if tr.next != nil {
-		return tr.next.Forward(ctx)
+	if tr.Next != nil {
+		return tr.Next.Forward(ctx)
 	}
 	return nil
 }
 
-func (tr *treeRunner) Reverse(ctx context.Context) error {
-	if tr.next != nil {
-		if err := tr.next.Reverse(ctx); err != nil {
+func (tr *TreeRunner) Reverse(ctx context.Context) error {
+	if tr.Next != nil {
+		if err := tr.Next.Reverse(ctx); err != nil {
 			return err
 		}
 	}
-	if err := parallel(tr.workspaces, func(ws *work) error {
+	if err := parallel(tr.Workspaces, func(ws *Job) error {
 		return ws.run(ctx)
 	}); err != nil {
 		return err
 	}
-	if err := parallel(tr.groups, func(group *treeRunner) error {
+	if err := parallel(tr.Group, func(group *TreeRunner) error {
 		return group.Reverse(ctx)
 	}); err != nil {
 		return err
@@ -77,37 +77,37 @@ func (tr *treeRunner) Reverse(ctx context.Context) error {
 	return nil
 }
 
-func (tr *treeRunner) Signal(sig os.Signal) {
-	if len(tr.groups) != 0 {
-		for _, group := range tr.groups {
+func (tr *TreeRunner) Signal(sig os.Signal) {
+	if len(tr.Group) != 0 {
+		for _, group := range tr.Group {
 			group.Signal(sig)
 		}
 	}
-	if len(tr.workspaces) != 0 {
-		for _, workspace := range tr.workspaces {
+	if len(tr.Workspaces) != 0 {
+		for _, workspace := range tr.Workspaces {
 			workspace.signal(sig)
 		}
 	}
-	if tr.next != nil {
-		tr.next.Signal(sig)
+	if tr.Next != nil {
+		tr.Next.Signal(sig)
 	}
 }
 
-func (tr *treeRunner) Report(root treeprint.Tree) treeprint.Tree {
-	if len(tr.groups) != 0 {
+func (tr *TreeRunner) Report(root treeprint.Tree) treeprint.Tree {
+	if len(tr.Group) != 0 {
 		groups := root.AddBranch("groups")
-		for _, g := range tr.groups {
-			g.Report(groups.AddBranch(g.name))
+		for _, g := range tr.Group {
+			g.Report(groups.AddBranch(g.Name))
 		}
 	}
-	if len(tr.workspaces) != 0 {
+	if len(tr.Workspaces) != 0 {
 		workspaces := root.AddBranch("workspaces")
-		for _, ws := range tr.workspaces {
+		for _, ws := range tr.Workspaces {
 			workspaces.AddNode(ws.String())
 		}
 	}
-	if tr.next != nil {
-		tr.next.Report(root.AddBranch("next"))
+	if tr.Next != nil {
+		tr.Next.Report(root.AddBranch("next"))
 	}
 	return root
 }
@@ -141,51 +141,51 @@ func parallel[T any](items []T, action func(T) error) error {
 	return nil
 }
 
-type execWork func(string) *work
+type Worker func(string) *Job
 
-type work struct {
-	name   string
-	cmd    *exec.Cmd
-	stdout *bytes.Buffer
-	stderr *bytes.Buffer
+type Job struct {
+	Name   string
+	Cmd    *exec.Cmd
+	Stdout *bytes.Buffer
+	Stderr *bytes.Buffer
 }
 
-func (w *work) String() string {
-	return fmt.Sprintf("%s: %s", w.name, w.result())
+func (j *Job) String() string {
+	return fmt.Sprintf("%s: %s", j.Name, j.result())
 }
 
-func (w *work) signal(sig os.Signal) {
-	if w.cmd.Process != nil {
-		w.cmd.Process.Signal(sig)
+func (j *Job) signal(sig os.Signal) {
+	if j.Cmd.Process != nil {
+		j.Cmd.Process.Signal(sig)
 	}
 }
 
-func (w *work) run(ctx context.Context) error {
+func (j *Job) run(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	default:
 	}
-	if err := w.cmd.Start(); err == nil {
-		if err := w.cmd.Wait(); err != nil {
-			return fmt.Errorf("%s: %w", w.name, err)
+	if err := j.Cmd.Start(); err == nil {
+		if err := j.Cmd.Wait(); err != nil {
+			return fmt.Errorf("%s: %w", j.Name, err)
 		}
 	}
 	return nil
 }
 
-func (w *work) exitCode() int {
-	if w.cmd.ProcessState == nil {
+func (j *Job) ExitCode() int {
+	if j.Cmd.ProcessState == nil {
 		return -1
 	}
-	return w.cmd.ProcessState.ExitCode()
+	return j.Cmd.ProcessState.ExitCode()
 }
 
-func (w *work) result() string {
-	if w.cmd.ProcessState == nil {
+func (j *Job) result() string {
+	if j.Cmd.ProcessState == nil {
 		return color.CyanString("skipped")
 	}
-	exitCode := w.cmd.ProcessState.ExitCode()
+	exitCode := j.Cmd.ProcessState.ExitCode()
 	if exitCode == 0 {
 		return color.GreenString("success")
 	}

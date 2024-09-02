@@ -1,0 +1,34 @@
+version: 2
+project_name: terrallel
+
+before:
+  hooks:
+    - make test
+
+builds:
+  - id: terrallel
+    binary: terrallel
+    main: .
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - "-s -w"
+
+archives:
+  - id: default
+    format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+      - dist/terrallel*
+
+checksum:
+  name_template: "{{ .ProjectName }}_checksums.txt"
