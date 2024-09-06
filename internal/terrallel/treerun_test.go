@@ -4,12 +4,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"regexp"
 	"runtime"
 	"strconv"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 
@@ -58,22 +58,32 @@ func testWorker(ws string) *terrallel.Job {
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
 		cmd = exec.Command("cmd", "/C", fmt.Sprintf(`
-			SET WORKSPACE="%s"
-			SET /A SLEEP=%d/1000
-			SET EXITCODE=%d
-			echo running %%WORKSPACE%% for %%SLEEP%%s then exiting %%EXITCODE%%
-			ping -n %%SLEEP%% 127.0.0.1 > nul
-			exit /b %%EXITCODE%%
+@echo off
+SET WORKSPACE="%s"
+SET /A SLEEP=%d/1000
+SET EXITCODE=%d
+echo running %%WORKSPACE%% for %%SLEEP%% seconds then exiting %%EXITCODE%%
+rem Trap CTRL+C (Interrupt signal)
+:loop
+ping -n %%SLEEP%% 127.0.0.1 > nul || goto interrupted
+goto end
+
+:interrupted
+echo INTERRUPTED
+exit /b 1
+
+:end
+exit /b %%EXITCODE%%
 		`, ws, delayms, exit))
 	} else {
 		cmd = exec.Command("sh", "-c", fmt.Sprintf(`
-			trap 'echo INTERRUPTED; exit 130' INT
-			WORKSPACE="%s"
-			SLEEP="%.3f"
-			EXIT=%d
-			echo "running ${WORKSPACE} for ${SLEEP}s then exiting ${EXIT}"
-			sleep ${SLEEP}
-			exit ${EXIT}
+trap 'echo INTERRUPTED; exit 130' INT
+WORKSPACE="%s"
+SLEEP="%.3f"
+EXIT=%d
+echo "running ${WORKSPACE} for ${SLEEP}s then exiting ${EXIT}"
+sleep ${SLEEP}
+exit ${EXIT}
 		`, ws, float64(delayms)/1000, exit))
 	}
 
@@ -114,7 +124,7 @@ func TestRunTreeForward(t *testing.T) {
 		{
 			name: "sibling failures don't affect each other",
 			root: &terrallel.Target{
-				Workspaces: []string{"a.delay(10).exit(0)", "b.delay(10).exit(0)", "c.delay(10).exit(1)", "d.delay(10).exit(0)", "e.delay(10).exit(0)"},
+				Workspaces: []string{"a.delay(30).exit(0)", "b.delay(20).exit(0)", "c.delay(10).exit(1)", "d.delay(40).exit(0)", "e.delay(30).exit(0)"},
 			},
 			expected: &exitTree{
 				Workspaces: []int{0, 0, 1, 0, 0},
@@ -214,7 +224,7 @@ func TestRunTreeReverse(t *testing.T) {
 		{
 			name: "sibling failures don't affect each other",
 			root: &terrallel.Target{
-				Workspaces: []string{"a.delay(10).exit(0)", "b.delay(10).exit(0)", "c.delay(10).exit(1)", "d.delay(10).exit(0)", "e.delay(10).exit(0)"},
+				Workspaces: []string{"a.delay(30).exit(0)", "b.delay(20).exit(0)", "c.delay(10).exit(1)", "d.delay(40).exit(0)", "e.delay(30).exit(0)"},
 			},
 			expected: &exitTree{
 				Workspaces: []int{0, 0, 1, 0, 0},
@@ -350,7 +360,7 @@ func TestRunSignal(t *testing.T) {
 				runner.Forward(context.Background())
 			}()
 			time.Sleep(time.Duration(tt.exitAfterMs) * time.Millisecond)
-			runner.Signal(syscall.SIGINT)
+			runner.Signal(os.Interrupt)
 			wg.Wait()
 			got := collectExits(runner)
 			if diff := cmp.Diff(tt.expected, got); diff != "" {

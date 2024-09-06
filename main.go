@@ -39,7 +39,7 @@ func main() {
 	termReceived := false
 	termMessage := false
 	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		for sig := range sigChan {
 			if termReceived {
