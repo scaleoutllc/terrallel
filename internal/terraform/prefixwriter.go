@@ -1,4 +1,4 @@
-package terrallel
+package terraform
 
 import (
 	"bytes"
@@ -14,7 +14,6 @@ type writer struct {
 	mu     sync.Mutex
 }
 
-// prefixWriter creates a new writer with a prefix
 func prefixWriter(w io.Writer, prefix string) *writer {
 	return &writer{
 		writer: w,

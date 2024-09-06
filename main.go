@@ -1,93 +1,64 @@
 package main
 
 import (
-	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"os"
-	"os/signal"
-	"syscall"
+	"strings"
 
-	"github.com/scaleoutllc/terrallel/internal/terrallel"
+	"github.com/fatih/color"
+	"github.com/scaleoutllc/terrallel/internal/cli"
+	"github.com/spf13/cobra"
 )
 
 func main() {
 	var manifestPath string
-	flag.StringVar(&manifestPath, "m", "Infrafile", "Path to the terrallel manifest file (default: Infrafile)")
-	flag.Parse()
-	args := flag.Args()
-	if len(args) < 2 {
-		fail(errors.New("terrallel [-m] <target> -- <terraform command>"))
-	}
-	infra := terrallel.New(os.Stdout, os.Stderr)
-	if err := infra.Load(manifestPath); err != nil {
-		fail(err)
-	}
-	targetName := args[0]
-	target, ok := infra.Manifest[targetName]
-	if !ok {
-		fail(fmt.Errorf("target %s not found", targetName))
-	}
-	tfArgs, err := argsAfterDoubleDash(args)
-	if err != nil {
-		fail(err)
-	}
-	runner := infra.Runner(target, tfArgs)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	termReceived := false
-	termMessage := false
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		for sig := range sigChan {
-			if termReceived {
-				if !termMessage {
-					termMessage = true
-					os.Stderr.Write([]byte("\nTerrallel forcefully shutting down...\n"))
-				}
-			} else {
-				os.Stderr.Write([]byte("\nTerrallel shutting down gracefully...\n"))
-				termReceived = true
+	var dryRun bool
+	var rootCmd = &cobra.Command{
+		Use:   "terrallel",
+		Short: "run terraform in parallel across dependent workspaces",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			dashIndex := cmd.ArgsLenAtDash()
+			if len(args) == 0 || dashIndex == 0 {
+				return errors.New("no target specified")
 			}
-			cancel()
-			runner.Signal(sig)
-		}
-	}()
-	var treeErr error
-	var reverse bool
-	for _, arg := range tfArgs {
-		if arg == "destroy" {
-			reverse = true
-		}
+			if dashIndex == -1 || strings.TrimSpace(strings.Join(args[dashIndex:], "")) == "" {
+				return errors.New("no terraform command defined after `--`")
+			}
+			return cli.Root(manifestPath, args[0], args[dashIndex:], dryRun)
+		},
 	}
-	if reverse {
-		treeErr = runner.Reverse(ctx)
+	rootCmd.SilenceErrors = true
+	rootCmd.SilenceUsage = true
+	rootCmd.SetUsageTemplate(`Usage:
+  terrallel [-cd] <target> -- <terraform-command>
+
+Flags:
+{{.Flags.FlagUsages | trimTrailingWhitespaces}}
+
+Example:
+  terrallel network -- init
+  terrallel network -- apply -auto-approve
+  terrallel network -- destroy -auto-approve`)
+	rootCmd.Flags().StringVarP(&manifestPath, "manifest", "m", "Infrafile", "Path to the manifest file")
+	rootCmd.Flags().BoolVarP(&dryRun, "dry-run", "d", false, "Enable dry-run mode")
+	if err := rootCmd.Execute(); err != nil {
+		fmt.Println(errorBar(err))
+		os.Exit(1)
+	}
+}
+
+func errorBar(err error) string {
+	prefix := color.RedString("│ ")
+	lines := strings.Split(err.Error(), "\n")
+	mainErr := color.RedString("Error: ") + color.New(color.FgHiWhite, color.Bold).Sprint(lines[0])
+	if len(lines) > 1 {
+		lines = append([]string{mainErr, ""}, lines[1:]...)
 	} else {
-		treeErr = runner.Forward(ctx)
+		lines = []string{mainErr}
 	}
-	fmt.Println(runner)
-	if treeErr != nil {
-		fail(treeErr)
+	for i, line := range lines {
+		lines[i] = prefix + line
 	}
-}
-
-func argsAfterDoubleDash(args []string) ([]string, error) {
-	sepIndex := -1
-	for i, arg := range args {
-		if arg == "--" {
-			sepIndex = i
-			break
-		}
-	}
-	if sepIndex == -1 || sepIndex == len(args)-1 {
-		return nil, fmt.Errorf("missing or incomplete -- separator")
-	}
-	return args[sepIndex+1:], nil
-}
-
-func fail(err error) {
-	fmt.Println(err)
-	os.Exit(1)
+	return color.RedString("╷\n") + strings.Join(lines, "\n") + color.RedString("\n╵")
 }

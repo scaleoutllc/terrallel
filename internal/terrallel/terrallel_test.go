@@ -1,7 +1,6 @@
 package terrallel_test
 
 import (
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,7 +10,7 @@ import (
 	"github.com/scaleoutllc/terrallel/internal/terrallel"
 )
 
-func TestLoad(t *testing.T) {
+func TestNew(t *testing.T) {
 	tests := []struct {
 		name        string
 		manifest    string
@@ -233,8 +232,7 @@ targets:
 					t.Fatalf("failed to write import file %s: %v", filename, err)
 				}
 			}
-			tl := terrallel.New(io.Discard, io.Discard)
-			err := tl.Load(manifestPath)
+			infra, err := terrallel.New(manifestPath)
 			if tt.expectedErr != "" {
 				if err == nil {
 					t.Errorf("expected error but got none")
@@ -245,7 +243,7 @@ targets:
 				if err != nil {
 					t.Errorf("unxpected error: %v", err)
 				}
-				if diff := cmp.Diff(tt.expected, tl.Manifest); diff != "" {
+				if diff := cmp.Diff(tt.expected, infra.Manifest); diff != "" {
 					t.Errorf("manifest mismatch (-expected +actual):\n%s", diff)
 				}
 			}

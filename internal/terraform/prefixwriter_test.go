@@ -1,4 +1,4 @@
-package terrallel
+package terraform
 
 import (
 	"bytes"

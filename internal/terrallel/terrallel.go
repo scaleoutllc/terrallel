@@ -2,9 +2,7 @@ package terrallel
 
 import (
 	"fmt"
-	"io"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"strings"
@@ -15,15 +13,6 @@ import (
 type Terrallel struct {
 	Config   *Config `yaml:"terrallel,omitempty"`
 	Manifest map[string]*Target
-	stdout   io.Writer
-	stderr   io.Writer
-}
-
-type Target struct {
-	Name       string
-	Group      []*Target `yaml:"group,omitempty"`
-	Workspaces []string  `yaml:"workspaces,omitempty"`
-	Next       *Target   `yaml:"next,omitempty"`
 }
 
 type Config struct {
@@ -31,60 +20,37 @@ type Config struct {
 	Import  []string
 }
 
-func New(stdout io.Writer, stderr io.Writer) *Terrallel {
-	return &Terrallel{
+func New(path string) (*Terrallel, error) {
+	t := &Terrallel{
 		Manifest: map[string]*Target{},
 		Config:   &Config{},
-		stdout:   stdout,
-		stderr:   stderr,
 	}
-}
-
-func (t *Terrallel) Load(path string) error {
 	manifest, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("reading: %w", err)
+		return nil, fmt.Errorf("reading: %w", err)
 	}
 	if err = yaml.Unmarshal(manifest, t); err != nil {
-		return fmt.Errorf("parsing manifest %s: %w", path, err)
+		return nil, fmt.Errorf("parsing manifest %s: %w", path, err)
 	}
 	if t.Config.Import == nil {
 		t.Config.Import = []string{}
 	}
 	importBytes, err := readImports(filepath.Dir(path), t.Config.Import)
 	if err != nil {
-		return fmt.Errorf("reading import files: %w", err)
+		return nil, fmt.Errorf("reading import files: %w", err)
 	}
 	unresolved, err := newUnresolved(append(importBytes, manifest))
 	if err != nil {
-		return fmt.Errorf("parsing imports: %w", err)
+		return nil, fmt.Errorf("parsing imports: %w", err)
 	}
 	for name, target := range unresolved {
 		if resolved, err := target.resolve(unresolved, name, map[string]bool{}); err != nil {
-			return fmt.Errorf("resolving targets: %w", err)
+			return nil, fmt.Errorf("resolving targets: %w", err)
 		} else {
 			t.Manifest[name] = resolved
 		}
 	}
-	return nil
-}
-
-func (t *Terrallel) Runner(target *Target, args []string) *TreeRunner {
-	return NewTreeRunner(target, func(name string) *Job {
-		prefix := fmt.Sprintf("[%s]: ", name)
-		stdout := prefixWriter(t.stdout, prefix)
-		stderr := prefixWriter(t.stderr, prefix)
-		cmd := exec.Command("terraform", args...)
-		cmd.Dir = path.Join(t.Config.Basedir, name)
-		cmd.Stdout = stdout
-		cmd.Stderr = stderr
-		return &Job{
-			Name:   name,
-			Cmd:    cmd,
-			Stdout: stdout.saved,
-			Stderr: stderr.saved,
-		}
-	})
+	return t, nil
 }
 
 func readImports(basedir string, globs []string) ([][]byte, error) {
@@ -145,7 +111,7 @@ func (t *target) resolve(targets unresolved, name string, visited map[string]boo
 	if len(t.Group) != 0 && len(t.Workspaces) != 0 {
 		return nil, fmt.Errorf("workspaces and group cannot coexist at the same level")
 	}
-	if visited[name] {
+	if visited[name] && name != "next" {
 		return nil, fmt.Errorf("recursive loop detected for target %s", name)
 	}
 	visited[name] = true

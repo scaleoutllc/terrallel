@@ -13,13 +13,19 @@ fmt:
 vet:
 	go vet ./... && staticcheck ./...
 
+ifeq ($(OS),Windows_NT)
+    DEV_NULL = NUL
+else
+    DEV_NULL = /dev/null
+endif
 test:
-	go test -v ./... -coverprofile /dev/null
+	go generate ./...
+	go test -v ./... -coverprofile=$(DEV_NULL)
 
 validate: fmt lint vet test
 
 build: validate
-	go build -o ./dist ./...
+	go build -o ./dist/terrallel main.go
 
 run: validate
 	go run ./
