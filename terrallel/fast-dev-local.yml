@@ -1,0 +1,33 @@
+targets:
+  # This manages the local "US" management cluster
+  fast-dev-mgmt-local-us-cluster:
+    workspaces:
+    - fast/dev/local/north-america/mgmt-cluster/k8s
+    next:
+      workspaces:
+      - fast/dev/local/north-america/mgmt-cluster/core-services
+      next:
+        workspaces:
+        - fast/dev/local/north-america/mgmt-cluster/routing
+
+  # This manages the local "US" workload cluster
+  fast-dev-workload-local-us-cluster:
+    workspaces:
+    - fast/dev/local/north-america/workload-cluster/k8s
+    next:
+      workspaces:
+      - fast/dev/local/north-america/workload-cluster/core-services
+      next:
+        workspaces:
+        - fast/dev/local/north-america/workload-cluster/routing
+
+  # This manages the local "Australian" workload cluster
+  fast-dev-workload-local-au-cluster:
+    workspaces:
+    - fast/dev/local/australia/workload-cluster/k8s
+    next:
+      workspaces:
+      - fast/dev/local/australia/workload-cluster/core-services
+      next:
+        workspaces:
+        - fast/dev/local/australia/workload-cluster/routing

@@ -1,0 +1,35 @@
+targets:
+  # This manages all AWS clusters as one.
+  fast-dev-aws-clusters:
+    group:
+    - fast-dev-workload-aws-us-cluster
+    - fast-dev-workload-aws-au-cluster
+    next:
+      # This L4 load balancer (AWS Accelerator) is a global entrypoint to
+      # all regional AWS clusters for the fast environment. It must exist
+      # before EKS clusters are created. Each regional EKS cluster has a
+      # load balancer that will be associated with this.
+      workspaces:
+      - fast/dev/aws/global/accelerator
+
+  # This manages the US AWS cluster.
+  fast-dev-workload-aws-us-cluster:
+    workspaces:
+    - fast/dev/aws/us-east-1/workload-cluster/k8s
+    next:
+      workspaces:
+      - fast/dev/aws/us-east-1/workload-cluster/core-services
+      next:
+        workspaces:
+        - fast/dev/aws/us-east-1/workload-cluster/routing
+
+  # This manages the Australian AWS cluster.
+  fast-dev-workload-aws-au-cluster:
+    workspaces:
+    - fast/dev/aws/ap-southeast-2/workload-cluster/k8s
+    next:
+      workspaces:
+      - fast/dev/aws/ap-southeast-2/workload-cluster/core-services
+      next:
+        workspaces:
+        - fast/dev/aws/ap-southeast-2/workload-cluster/routing
