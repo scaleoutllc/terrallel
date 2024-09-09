@@ -1,0 +1,16 @@
+targets:
+  dev-gcp-networks:
+    group:
+    - dev-gcp-network-us
+    - dev-gcp-network-au
+    next:
+      workspaces:
+      - dev/gcp/global
+
+  dev-gcp-network-us:
+    workspaces:
+    - dev/gcp/us-east1/network
+
+  dev-gcp-network-au:
+    workspaces:
+    - dev/gcp/australia-southeast1/network

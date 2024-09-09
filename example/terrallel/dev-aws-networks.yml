@@ -1,0 +1,16 @@
+targets:
+  dev-aws-networks:
+    group:
+    - dev-aws-network-us
+    - dev-aws-network-au
+    next:
+      workspaces:
+      - dev/aws/global
+
+  dev-aws-network-us:
+    workspaces:
+    - dev/aws/us-east-1/network
+
+  dev-aws-network-au:
+    workspaces:
+    - dev/aws/ap-southeast-2/network

@@ -1,0 +1,19 @@
+targets:
+  dev-gcp-clusters:
+    group:
+    - dev-gcp-us-cluster
+    - dev-gcp-au-cluster
+
+  dev-gcp-us-cluster:
+    workspaces:
+    - dev/gcp/us-east1/cluster/k8s
+    next:
+      workspaces:
+      - dev/gcp/us-east1/cluster/services
+
+  dev-gcp-au-cluster:
+    workspaces:
+    - dev/gcp/australia-southeast1/cluster/k8s
+    next:
+      workspaces:
+      - dev/gcp/australia-southeast1/cluster/services

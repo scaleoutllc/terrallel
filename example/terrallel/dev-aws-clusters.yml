@@ -1,0 +1,19 @@
+targets:
+  dev-aws-clusters:
+    group:
+    - dev-aws-us-cluster
+    - dev-aws-au-cluster
+
+  dev-aws-us-cluster:
+    workspaces:
+    - dev/aws/us-east-1/cluster/k8s
+    next:
+      workspaces:
+      - dev/aws/us-east-1/cluster/services
+
+  dev-aws-au-cluster:
+    workspaces:
+    - dev/aws/ap-southeast-2/cluster/k8s
+    next:
+      workspaces:
+      - dev/aws/ap-southeast-2/cluster/services

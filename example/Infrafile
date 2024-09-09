@@ -1,0 +1,20 @@
+terrallel:
+  basedir: environments
+  import:
+  - terrallel/*.yml
+
+targets:
+  dev:
+    group:
+    - dev-aws-networks
+    - dev-gcp-networks
+    next:
+      workspaces:
+      - dev/multi-cloud/networks
+      next:
+        group:
+        - dev-gcp-clusters
+        - dev-aws-clusters
+        next:
+          workspaces:
+          - dev/multi-cloud/clusters
